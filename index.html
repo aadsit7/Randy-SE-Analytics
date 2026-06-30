@@ -242,7 +242,7 @@
       <div id="timeline"></div>
     </div>
     <div class="panel">
-      <h2>Which model answered</h2>
+      <h2>Who's asking</h2>
       <div class="donutwrap"><div id="donut"></div><div class="legend" id="donutLegend"></div></div>
     </div>
   </section>
@@ -404,14 +404,13 @@ function renderKpis(){
   const dates=VIEW.map(r=>r.date).filter(Boolean).sort((a,b)=>a-b);
   let range="—";
   if(dates.length)range=fmtDate(dates[0])+" – "+fmtDate(dates[dates.length-1]);
-  const mc={};VIEW.forEach(r=>{if(r.model)mc[r.model]=(mc[r.model]||0)+1;});
-  const topModel=Object.entries(mc).sort((a,b)=>b[1]-a[1])[0];
   const named=new Set(VIEW.filter(r=>r.user).map(r=>r.user)).size;
+  const perPerson=named?Math.round(VIEW.length/named):0;
   const cards=[
     ["Questions logged",VIEW.length.toLocaleString(),ALL.length!==VIEW.length?`of ${ALL.length.toLocaleString()} total`:"in this view"],
     ["Conversations",sessions.toLocaleString(),"distinct sessions"],
     ["Active days",days.size.toLocaleString(),range],
-    ["Most-used model",topModel?shortModel(topModel[0]):"—",topModel?`${topModel[1].toLocaleString()} answers · ${named} named people`:"—"],
+    ["Active people",named?named.toLocaleString():"—",named?`~${perPerson.toLocaleString()} questions each`:"no names yet"],
   ];
   document.getElementById("kpis").innerHTML=cards.map(c=>
     `<div class="kpi"><span class="edge"></span><div class="lab">${c[0]}</div>
@@ -457,8 +456,12 @@ function renderTimeline(){
 const DONUT_COLORS=["#0000CC","#00BFFF","#0F7A3F","#CC8800","#E07050","#7A5AF8","#CC2222"];
 function renderDonut(){
   const el=document.getElementById("donut");const leg=document.getElementById("donutLegend");
-  const mc={};VIEW.forEach(r=>{const m=r.model||"(unknown)";mc[m]=(mc[m]||0)+1;});
-  const items=Object.entries(mc).sort((a,b)=>b[1]-a[1]);
+  const mc={};VIEW.forEach(r=>{const p=r.user||"(unattributed)";mc[p]=(mc[p]||0)+1;});
+  let items=Object.entries(mc).sort((a,b)=>b[1]-a[1]);
+  if(items.length>7){
+    const others=items.slice(6).reduce((s,i)=>s+i[1],0);
+    items=items.slice(0,6).concat([["Others",others]]);
+  }
   const total=items.reduce((s,i)=>s+i[1],0);
   if(!total){el.innerHTML='<div class="empty">No data.</div>';leg.innerHTML="";return;}
   const cx=70,cy=70,r=58,rin=36;let ang=-Math.PI/2;
@@ -480,10 +483,10 @@ function renderDonut(){
   });
   el.innerHTML=`<svg viewBox="0 0 140 140" width="140" height="140">${segs}
     <text x="70" y="66" text-anchor="middle" font-size="22" font-weight="800" fill="#1A1A2E">${total.toLocaleString()}</text>
-    <text x="70" y="84" text-anchor="middle" font-size="9" fill="#4A4A5A" letter-spacing=".5">ANSWERS</text></svg>`;
+    <text x="70" y="84" text-anchor="middle" font-size="9" fill="#4A4A5A" letter-spacing=".5">QUESTIONS</text></svg>`;
   leg.innerHTML=items.map((it,i)=>{const pct=Math.round(it[1]/total*100);
     return `<div class="li"><span class="sw" style="background:${DONUT_COLORS[i%DONUT_COLORS.length]}"></span>
-      <span class="ln" title="${esc(it[0])}">${esc(shortModel(it[0]))}</span>
+      <span class="ln" title="${esc(it[0])}">${esc(it[0])}</span>
       <span class="lv">${it[1].toLocaleString()} · ${pct}%</span></div>`;}).join("");
 }
 
