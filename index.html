@@ -43,6 +43,12 @@
     padding:8px 14px;font-weight:700;font-size:12.5px;cursor:pointer}
   .btn:hover{filter:brightness(1.05)}
   .btn.ghost{background:transparent;color:#fff;border:1px solid rgba(255,255,255,.4)}
+  .btn[disabled]{opacity:.65;cursor:default;filter:none}
+  .btn .ic{display:inline-block;font-weight:700;line-height:1}
+  .btn .ic.spinning{animation:spin .7s linear infinite}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  .refreshmsg{font-size:11.5px;font-weight:600;color:var(--muted);white-space:nowrap}
+  .refreshmsg.err{color:#ffd2d2} .refreshmsg.ok{color:#bfeede}
 
   /* ---------- connect panel ---------- */
   .connect{background:#fff;border:1px solid var(--line);border-radius:8px;
@@ -178,6 +184,8 @@
     </div>
     <div class="status">
       <span id="sourcePill" class="pill"><span class="dot"></span><span id="sourceLabel">Sample data</span></span>
+      <button class="btn" id="refreshBtn" title="Reload the latest data from your live Google Sheet"><span class="ic" id="refreshIc">↻</span> Refresh data</button>
+      <span class="refreshmsg" id="refreshMsg"></span>
       <button class="btn ghost" id="connectToggle">Connect data</button>
     </div>
   </div>
@@ -362,6 +370,7 @@ async function loadUrl(url){
 
 /* ---------------- state ---------------- */
 let ALL=[], VIEW=[], page=1, perPage=25;
+let currentUrl=DEFAULT_URL;   /* the live source last loaded; what Refresh re-fetches */
 let openRow=null;
 const F={search:"",topic:"",model:"",user:"",from:"",to:"",day:""};
 
@@ -589,10 +598,32 @@ document.getElementById("loadBtn").addEventListener("click",async()=>{
   const msg=document.getElementById("loadMsg");
   if(!url){msg.className="loadmsg err";msg.textContent="Paste a web address first.";return;}
   msg.className="loadmsg";msg.textContent="Loading…";
-  try{const raw=await loadUrl(url);loadData(raw,true);
+  try{const raw=await loadUrl(url);currentUrl=url;loadData(raw,true);
     msg.className="loadmsg ok";msg.textContent="Loaded "+ALL.length+" questions.";}
   catch(err){msg.className="loadmsg err";
     msg.textContent="Couldn't load it: "+err.message+". Make sure the sheet is published to the web.";}
+});
+
+/* one-click refresh of the live Google Sheet — no need to reopen "Connect data" */
+const refreshBtn=document.getElementById("refreshBtn");
+const refreshIc=document.getElementById("refreshIc");
+const refreshMsg=document.getElementById("refreshMsg");
+refreshBtn.addEventListener("click",async()=>{
+  const url=(document.getElementById("dataUrl").value.trim())||currentUrl||DEFAULT_URL;
+  if(!url){refreshMsg.className="refreshmsg err";refreshMsg.textContent="No sheet connected yet.";return;}
+  refreshBtn.disabled=true;refreshIc.classList.add("spinning");
+  refreshMsg.className="refreshmsg";refreshMsg.textContent="Refreshing…";
+  try{
+    const raw=await loadUrl(url);currentUrl=url;loadData(raw,true);
+    const t=new Date().toLocaleTimeString(undefined,{hour:"2-digit",minute:"2-digit"});
+    refreshMsg.className="refreshmsg ok";
+    refreshMsg.textContent="Updated "+t+" · "+ALL.length+" questions";
+  }catch(err){
+    refreshMsg.className="refreshmsg err";
+    refreshMsg.textContent="Couldn't refresh: "+err.message;
+  }finally{
+    refreshBtn.disabled=false;refreshIc.classList.remove("spinning");
+  }
 });
 
 /* ---------------- boot: try live, fall back to sample ---------------- */
