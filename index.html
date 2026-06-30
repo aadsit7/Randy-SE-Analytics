@@ -34,11 +34,9 @@
   .titleblock h1{font-size:16px;font-weight:700;margin:0;letter-spacing:-.2px}
   .titleblock p{margin:2px 0 0;color:var(--muted);font-size:12px}
   .status{display:flex;align-items:center;gap:10px}
-  .pill{display:inline-flex;align-items:center;gap:7px;background:rgba(255,255,255,.12);
-    border:1px solid rgba(255,255,255,.25);color:#fff;border-radius:999px;
-    padding:6px 12px;font-size:12px;font-weight:600}
   .dot{width:8px;height:8px;border-radius:50%;background:var(--amber)}
-  .pill.live .dot{background:#3ad07a;box-shadow:0 0 0 3px rgba(58,208,122,.25)}
+  .statusdot{background:#e5484d;box-shadow:0 0 0 3px rgba(229,72,77,.25)}
+  .statusdot.live{background:#3ad07a;box-shadow:0 0 0 3px rgba(58,208,122,.25)}
   .btn{background:var(--cyan);color:#04263a;border:none;border-radius:6px;
     padding:8px 14px;font-weight:700;font-size:12.5px;cursor:pointer}
   .btn:hover{filter:brightness(1.05)}
@@ -183,10 +181,9 @@
       <p>Every question asked of your assistant — searchable, sorted, and summarized.</p>
     </div>
     <div class="status">
-      <span id="sourcePill" class="pill"><span class="dot"></span><span id="sourceLabel">Sample data</span></span>
       <button class="btn" id="refreshBtn" title="Reload the latest data from your live Google Sheet"><span class="ic" id="refreshIc">↻</span> Refresh data</button>
       <span class="refreshmsg" id="refreshMsg"></span>
-      <button class="btn ghost" id="connectToggle">Connect data</button>
+      <button class="btn ghost" id="connectToggle" title="Sample data (built in)"><span class="dot statusdot" id="statusDot"></span> Connect data</button>
     </div>
   </div>
 </header>
@@ -573,9 +570,9 @@ function fillSelects(){
 
 /* ---------------- wire up ---------------- */
 function setSource(live){
-  const pill=document.getElementById("sourcePill"),lab=document.getElementById("sourceLabel");
-  if(live){pill.classList.add("live");lab.textContent="Live · your Google Sheet";}
-  else{pill.classList.remove("live");lab.textContent="Sample data (built in)";}
+  const dot=document.getElementById("statusDot"),toggle=document.getElementById("connectToggle");
+  if(live){dot.classList.add("live");toggle.title="Live · your Google Sheet";}
+  else{dot.classList.remove("live");toggle.title="Sample data (built in)";}
 }
 function loadData(raw,live){
   ALL=shapeRows(raw);fillSelects();applyFilters();setSource(live);
