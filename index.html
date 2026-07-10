@@ -182,6 +182,7 @@
     </div>
     <div class="status">
       <button class="btn" id="refreshBtn" title="Reload the latest data from your live Google Sheet"><span class="ic" id="refreshIc">↻</span> Refresh data</button>
+      <button class="btn" id="pdfBtn" title="Download the report below — exactly as filtered — as a PDF"><span class="ic">⬇</span> Download PDF</button>
       <span class="refreshmsg" id="refreshMsg"></span>
       <button class="btn ghost" id="connectToggle" title="Sample data (built in)"><span class="dot statusdot" id="statusDot"></span> Connect data</button>
     </div>
@@ -623,6 +624,326 @@ refreshBtn.addEventListener("click",async()=>{
     refreshMsg.textContent="Couldn't refresh: "+err.message;
   }finally{
     refreshBtn.disabled=false;refreshIc.classList.remove("spinning");
+  }
+});
+
+/* ---------------- PDF report download ----------------
+   Zero-dependency PDF writer: rebuilds the currently filtered report
+   (KPIs, timeline, donut, topics, full question list) as a vector PDF. */
+const PDF_W=612,PDF_H=792,PDF_M=40,PDF_FOOT=742;   /* US Letter, 40pt margins */
+const PDF_C={blue:"#0000CC",cyan:"#00BFFF",ink:"#1A1A2E",gray:"#4A4A5A",
+  light:"#F0F0F6",line:"#E3E4F0",tint:"#F7F8FD",muted:"#AABBEE",white:"#FFFFFF"};
+const _pdfMeas=document.createElement("canvas").getContext("2d");
+function pdfTextW(s,size,bold){
+  _pdfMeas.font=(bold?"700 ":"400 ")+size+"px Helvetica, Arial, sans-serif";
+  return _pdfMeas.measureText(String(s)).width*1.03;   /* small safety factor vs real Helvetica metrics */
+}
+/* Unicode → WinAnsi byte for chars the standard PDF fonts can show */
+const PDF_WINANSI={8216:145,8217:146,8220:147,8221:148,8211:150,8212:151,8230:133,
+  8226:149,8249:139,8250:155,8364:128,8482:153,8224:134,8225:135,710:136,8240:137,
+  8218:130,8222:132,402:131,732:152,352:138,353:154,338:140,339:156,381:142,382:158,
+  376:159,8239:32,8201:32,8194:32,8195:32};
+function pdfEnc(s){
+  let out="";
+  for(const ch of String(s)){
+    let c=ch.codePointAt(0);
+    if(c===10||c===13||c===9)c=32;
+    if(c>255)c=PDF_WINANSI[c]||63;   /* unknown glyphs become "?" */
+    const b=String.fromCharCode(c);
+    out+=(b==="("||b===")"||b==="\\")?"\\"+b:b;
+  }
+  return out;
+}
+function pdfCol(hex){const v=parseInt(hex.slice(1),16);
+  return [16,8,0].map(sh=>((v>>sh&255)/255).toFixed(3)).join(" ");}
+const pdfN=v=>Math.round(v*100)/100;
+
+function buildPdfReport(){
+  const pages=[];let y=0;
+  const add=op=>{pages[pages.length-1]+=op+"\n";};
+  const newPage=()=>{pages.push("");y=PDF_M+8;};
+  /* all coordinates below are from the top-left; flipped to PDF space on write */
+  const txt=(s,x,base,size,hex,bold,align)=>{
+    let xx=x;
+    if(align){const w=pdfTextW(s,size,bold);xx=align==="right"?x-w:x-w/2;}
+    add(`BT /${bold?"F2":"F1"} ${size} Tf ${pdfCol(hex)} rg 1 0 0 1 ${pdfN(xx)} ${pdfN(PDF_H-base)} Tm (${pdfEnc(s)}) Tj ET`);
+  };
+  const rect=(x,top,w,h,fill,stroke,lw)=>{
+    let op="";
+    if(fill)op+=pdfCol(fill)+" rg ";
+    if(stroke)op+=pdfCol(stroke)+" RG "+pdfN(lw||1)+" w ";
+    op+=`${pdfN(x)} ${pdfN(PDF_H-top-h)} ${pdfN(w)} ${pdfN(h)} re `+(fill&&stroke?"B":fill?"f":"S");
+    add(op);
+  };
+  const lin=(x1,y1,x2,y2,hex,lw)=>add(`${pdfCol(hex)} RG ${pdfN(lw||1)} w ${pdfN(x1)} ${pdfN(PDF_H-y1)} m ${pdfN(x2)} ${pdfN(PDF_H-y2)} l S`);
+  const pt=p=>pdfN(p[0])+" "+pdfN(PDF_H-p[1]);
+  const arcSegs=(cx,cy,r,a0,a1)=>{   /* circular arc as cubic beziers, ≤90° each */
+    const n=Math.max(1,Math.ceil(Math.abs(a1-a0)/(Math.PI/2)));
+    const da=(a1-a0)/n,k=4/3*Math.tan(da/4),out=[];
+    for(let i=0;i<n;i++){
+      const s=a0+i*da,e=s+da;
+      out.push({c1:[cx+r*Math.cos(s)-k*r*Math.sin(s),cy+r*Math.sin(s)+k*r*Math.cos(s)],
+        c2:[cx+r*Math.cos(e)+k*r*Math.sin(e),cy+r*Math.sin(e)-k*r*Math.cos(e)],
+        p:[cx+r*Math.cos(e),cy+r*Math.sin(e)]});
+    }
+    return out;
+  };
+  const wedge=(cx,cy,r,rin,a0,a1,hex)=>{
+    let d=pdfCol(hex)+" rg "+pt([cx+r*Math.cos(a0),cy+r*Math.sin(a0)])+" m ";
+    arcSegs(cx,cy,r,a0,a1).forEach(s=>d+=pt(s.c1)+" "+pt(s.c2)+" "+pt(s.p)+" c ");
+    d+=pt([cx+rin*Math.cos(a1),cy+rin*Math.sin(a1)])+" l ";
+    arcSegs(cx,cy,rin,a1,a0).forEach(s=>d+=pt(s.c1)+" "+pt(s.c2)+" "+pt(s.p)+" c ");
+    add(d+"h f");
+  };
+  const ring=(cx,cy,rmid,w,hex)=>{
+    let d=pdfCol(hex)+" RG "+pdfN(w)+" w "+pt([cx+rmid,cy])+" m ";
+    arcSegs(cx,cy,rmid,0,Math.PI*2).forEach(s=>d+=pt(s.c1)+" "+pt(s.c2)+" "+pt(s.p)+" c ");
+    add(d+"S");
+  };
+  const wrap=(s,size,bold,maxW)=>{
+    const words=String(s).split(/\s+/).filter(Boolean);
+    const lines=[];let cur="";
+    for(let w of words){
+      const t=cur?cur+" "+w:w;
+      if(pdfTextW(t,size,bold)<=maxW){cur=t;continue;}
+      if(cur)lines.push(cur);
+      while(pdfTextW(w,size,bold)>maxW){
+        let cut=w.length;
+        while(cut>1&&pdfTextW(w.slice(0,cut),size,bold)>maxW)cut--;
+        lines.push(w.slice(0,cut));w=w.slice(cut);
+      }
+      cur=w;
+    }
+    if(cur)lines.push(cur);
+    return lines.length?lines:[""];
+  };
+  const trunc=(s,size,bold,maxW)=>{
+    s=String(s);
+    if(pdfTextW(s,size,bold)<=maxW)return s;
+    while(s.length&&pdfTextW(s+"…",size,bold)>maxW)s=s.slice(0,-1);
+    return s+"…";
+  };
+  const ensure=h=>{if(y+h>PDF_FOOT)newPage();};
+
+  /* ---- page 1 header band ---- */
+  newPage();
+  rect(0,0,PDF_W,70,PDF_C.blue);
+  txt("Recast Software",PDF_M,32,16,PDF_C.white,true);
+  txt("SE Knowledge Console · Question log report",PDF_M,50,10,PDF_C.muted);
+  const now=new Date();
+  txt("Generated "+now.toLocaleString(undefined,{month:"short",day:"numeric",year:"numeric",hour:"2-digit",minute:"2-digit"}),PDF_W-PDF_M,32,9,PDF_C.white,false,"right");
+  const live=document.getElementById("statusDot").classList.contains("live");
+  txt(live?"Source: live Google Sheet":"Source: built-in sample data",PDF_W-PDF_M,48,9,PDF_C.muted,false,"right");
+  y=96;
+
+  /* ---- report scope ---- */
+  const dts=VIEW.map(r=>r.date).filter(Boolean).sort((a,b)=>a-b);
+  const range=dts.length?fmtDate(dts[0])+" – "+fmtDate(dts[dts.length-1]):"no dated questions";
+  txt(`${VIEW.length.toLocaleString()} of ${ALL.length.toLocaleString()} questions · ${range}`,PDF_M,y,13,PDF_C.ink,true);
+  y+=16;
+  const fb=[];
+  if(F.search)fb.push('search "'+F.search+'"');
+  if(F.topic)fb.push("topic "+F.topic);
+  if(F.model)fb.push("model "+shortModel(F.model));
+  if(F.user)fb.push("person "+F.user);
+  if(F.day)fb.push("day "+F.day);
+  if(F.from)fb.push("from "+F.from);
+  if(F.to)fb.push("to "+F.to);
+  txt(trunc(fb.length?"Filters: "+fb.join(" · "):"Filters: none — full data set",9.5,false,532),PDF_M,y,9.5,PDF_C.gray);
+  y+=20;
+
+  /* ---- KPI cards (same numbers as renderKpis) ---- */
+  const sessions=new Set(VIEW.map(r=>r.session).filter(Boolean)).size;
+  const daysSet=new Set(VIEW.map(r=>r.dateKey).filter(Boolean));
+  const named=new Set(VIEW.filter(r=>r.user).map(r=>r.user)).size;
+  const perPerson=named?Math.round(VIEW.length/named):0;
+  const kpis=[
+    ["QUESTIONS LOGGED",VIEW.length.toLocaleString(),ALL.length!==VIEW.length?`of ${ALL.length.toLocaleString()} total`:"in this view"],
+    ["CONVERSATIONS",sessions.toLocaleString(),"distinct sessions"],
+    ["ACTIVE DAYS",daysSet.size.toLocaleString(),range],
+    ["ACTIVE PEOPLE",named?named.toLocaleString():"—",named?`~${perPerson.toLocaleString()} questions each`:"no names yet"]
+  ];
+  const kw=(532-36)/4;
+  kpis.forEach((k,i)=>{
+    const x=PDF_M+i*(kw+12);
+    rect(x,y,kw,56,PDF_C.white,PDF_C.line,1);
+    rect(x,y+12,2.5,32,PDF_C.cyan);
+    txt(k[0],x+10,y+16,6.5,PDF_C.gray,true);
+    txt(k[1],x+10,y+38,17,PDF_C.ink,true);
+    txt(trunc(k[2],7.5,false,kw-16),x+10,y+50,7.5,PDF_C.gray);
+  });
+  y+=72;
+
+  /* ---- charts row: timeline + donut ---- */
+  const chY=y;
+  rect(PDF_M,chY,330,200,PDF_C.white,PDF_C.line,1);
+  rect(PDF_M+350,chY,182,200,PDF_C.white,PDF_C.line,1);
+  txt("QUESTIONS OVER TIME",PDF_M+12,chY+18,8,PDF_C.blue,true);
+  txt("WHO'S ASKING",PDF_M+362,chY+18,8,PDF_C.blue,true);
+  const counts={};VIEW.forEach(r=>{if(r.dateKey)counts[r.dateKey]=(counts[r.dateKey]||0)+1;});
+  const dkeys=Object.keys(counts).sort();
+  if(!dkeys.length){txt("No dated questions in this view.",PDF_M+165,chY+105,9,PDF_C.gray,false,"center");}
+  else{
+    const start=new Date(dkeys[0]),end=new Date(dkeys[dkeys.length-1]);
+    const days=[];for(let d=new Date(start);d<=end;d.setDate(d.getDate()+1)){
+      const k=d.toISOString().slice(0,10);days.push([k,counts[k]||0]);}
+    const gx=PDF_M+34,gy=chY+36,gw=276,gh=124;
+    const max=Math.max(...days.map(d=>d[1]),1);
+    for(let i=0;i<=4;i++){
+      const vy=gy+gh-gh*i/4;
+      lin(gx,vy,gx+gw,vy,i?PDF_C.light:PDF_C.line,0.7);
+      txt(String(Math.round(max*i/4)),gx-5,vy+2.5,7,PDF_C.gray,false,"right");
+    }
+    const bw=gw/days.length;
+    days.forEach((d,i)=>{
+      if(!d[1])return;
+      const h=d[1]/max*gh;
+      rect(gx+i*bw+bw*0.12,gy+gh-h,Math.max(bw*0.76,0.3),Math.max(h,1.5),PDF_C.cyan);
+    });
+    const step=Math.ceil(days.length/6);
+    days.forEach((d,i)=>{
+      if(i===days.length-1||(i%step===0&&days.length-1-i>step*0.6)){
+        const lbl=new Date(d[0]).toLocaleDateString(undefined,{month:"short",day:"numeric"});
+        txt(lbl,gx+i*bw+bw/2,gy+gh+13,7,PDF_C.gray,false,"center");
+      }
+    });
+  }
+  const mc={};VIEW.forEach(r=>{const p=r.user||"(unattributed)";mc[p]=(mc[p]||0)+1;});
+  let dItems=Object.entries(mc).sort((a,b)=>b[1]-a[1]);
+  if(dItems.length>7){
+    const others=dItems.slice(6).reduce((s,i)=>s+i[1],0);
+    dItems=dItems.slice(0,6).concat([["Others",others]]);
+  }
+  const dTotal=dItems.reduce((s,i)=>s+i[1],0);
+  if(!dTotal){txt("No data.",PDF_M+441,chY+105,9,PDF_C.gray,false,"center");}
+  else{
+    const cx=PDF_M+441,cy=chY+72,r=38,rin=24;
+    if(dItems.length===1)ring(cx,cy,(r+rin)/2,r-rin,DONUT_COLORS[0]);
+    else{let a=-Math.PI/2;
+      dItems.forEach((it,i)=>{const a2=a+it[1]/dTotal*Math.PI*2;
+        wedge(cx,cy,r,rin,a,a2,DONUT_COLORS[i%DONUT_COLORS.length]);a=a2;});}
+    txt(dTotal.toLocaleString(),cx,cy+2,12,PDF_C.ink,true,"center");
+    txt("QUESTIONS",cx,cy+12,5.5,PDF_C.gray,false,"center");
+    let ly=chY+126;
+    dItems.forEach((it,i)=>{
+      rect(PDF_M+362,ly-6,7,7,DONUT_COLORS[i%DONUT_COLORS.length]);
+      const pct=Math.round(it[1]/dTotal*100);
+      txt(it[1].toLocaleString()+" · "+pct+"%",PDF_M+522,ly,7.5,PDF_C.ink,true,"right");
+      txt(trunc(it[0],7.5,false,95),PDF_M+374,ly,7.5,PDF_C.gray);
+      ly+=11;
+    });
+  }
+  y=chY+216;
+
+  /* ---- top topics ---- */
+  const tc={};VIEW.forEach(r=>r.topics.forEach(t=>tc[t]=(tc[t]||0)+1));
+  const tItems=Object.entries(tc).sort((a,b)=>b[1]-a[1]);
+  const th=tItems.length?30+tItems.length*15+4:56;
+  ensure(th+12);
+  rect(PDF_M,y,532,th,PDF_C.white,PDF_C.line,1);
+  txt("TOP TOPICS",PDF_M+12,y+18,8,PDF_C.blue,true);
+  if(!tItems.length)txt("No topics in this view.",PDF_M+266,y+38,9,PDF_C.gray,false,"center");
+  else{
+    const tmax=Math.max(...tItems.map(i=>i[1]));
+    let ty=y+36;
+    tItems.forEach(([t,n])=>{
+      txt(trunc(t,8.5,true,120),PDF_M+12,ty+3,8.5,PDF_C.ink,true);
+      rect(PDF_M+140,ty-4,340,9,PDF_C.light);
+      rect(PDF_M+140,ty-4,Math.max(340*n/tmax,1.5),9,PDF_C.cyan);
+      txt(String(n),PDF_M+520,ty+3,8,PDF_C.gray,false,"right");
+      ty+=15;
+    });
+  }
+  y+=th+18;
+
+  /* ---- full question table (all filtered rows, not just the visible page) ---- */
+  const colD=PDF_M,colQ=PDF_M+92,wQ=262,colM=PDF_M+366,wM=76,colP=PDF_M+450,wP=82;
+  const tableHead=()=>{
+    ensure(60);
+    rect(PDF_M,y,532,16,PDF_C.light);
+    txt("DATE",colD+6,y+11,7,PDF_C.gray,true);
+    txt("QUESTION",colQ,y+11,7,PDF_C.gray,true);
+    txt("MODEL",colM,y+11,7,PDF_C.gray,true);
+    txt("PERSON",colP,y+11,7,PDF_C.gray,true);
+    y+=16;
+  };
+  ensure(72);
+  txt("QUESTIONS",PDF_M,y+12,10,PDF_C.blue,true);
+  txt(VIEW.length.toLocaleString()+" in this view",PDF_M+532,y+12,8.5,PDF_C.gray,false,"right");
+  y+=20;
+  tableHead();
+  if(!VIEW.length){
+    y+=26;txt("No questions match these filters.",PDF_M+266,y,9.5,PDF_C.gray,false,"center");y+=14;
+  }
+  VIEW.forEach((r,idx)=>{
+    const qLines=wrap(r.q||"(no question text)",8.5,true,wQ);
+    const topicsLine=r.topics&&r.topics.length?trunc(r.topics.join(" · "),7,false,wQ):"";
+    const rh=Math.max(10+qLines.length*10.5+(topicsLine?10:0),24);
+    if(y+rh>PDF_FOOT){newPage();tableHead();}
+    if(idx%2===1)rect(PDF_M,y,532,rh,PDF_C.tint);
+    let ty=y+13;
+    txt(fmtFull(r.date),colD+6,ty,7.5,PDF_C.gray);
+    qLines.forEach(l=>{txt(l,colQ,ty,8.5,PDF_C.ink,true);ty+=10.5;});
+    if(topicsLine)txt(topicsLine,colQ,ty,7,"#5A5AC0");
+    txt(trunc(shortModel(r.model)||"—",7.5,false,wM),colM,y+13,7.5,PDF_C.gray);
+    txt(trunc(r.user||"anonymous",7.5,false,wP),colP,y+13,7.5,r.user?PDF_C.gray:"#9AA0B8");
+    lin(PDF_M,y+rh,PDF_M+532,y+rh,PDF_C.line,0.6);
+    y+=rh;
+  });
+
+  /* ---- footer on every page ---- */
+  for(let i=0;i<pages.length;i++){
+    let f=`${pdfCol(PDF_C.line)} RG 0.8 w ${pdfN(PDF_M)} ${pdfN(PDF_H-758)} m ${pdfN(PDF_W-PDF_M)} ${pdfN(PDF_H-758)} l S\n`;
+    f+=`BT /F1 7.5 Tf ${pdfCol(PDF_C.gray)} rg 1 0 0 1 ${pdfN(PDF_M)} ${pdfN(PDF_H-770)} Tm (${pdfEnc("Recast Software · SE Knowledge Console")}) Tj ET\n`;
+    const pg=`Page ${i+1} of ${pages.length}`;
+    f+=`BT /F1 7.5 Tf ${pdfCol(PDF_C.gray)} rg 1 0 0 1 ${pdfN(PDF_W-PDF_M-pdfTextW(pg,7.5))} ${pdfN(PDF_H-770)} Tm (${pdfEnc(pg)}) Tj ET\n`;
+    pages[i]+=f;
+  }
+  return pdfAssemble(pages);
+}
+
+/* serialize content streams into a complete PDF file (latin-1 bytes) */
+function pdfAssemble(pages){
+  const objs=[];
+  objs[1]="<< /Type /Catalog /Pages 2 0 R >>";
+  objs[3]="<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>";
+  objs[4]="<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>";
+  let next=5;const kids=[];
+  pages.forEach(p=>{
+    const pid=next++,cid=next++;
+    kids.push(pid+" 0 R");
+    objs[pid]=`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${PDF_W} ${PDF_H}] /Resources << /Font << /F1 3 0 R /F2 4 0 R >> >> /Contents ${cid} 0 R >>`;
+    objs[cid]={stream:p};
+  });
+  objs[2]=`<< /Type /Pages /Kids [${kids.join(" ")}] /Count ${pages.length} >>`;
+  let out="%PDF-1.4\n%âãÏÓ\n";
+  const xref=[];
+  for(let i=1;i<next;i++){
+    xref[i]=out.length;
+    const o=objs[i];
+    if(typeof o==="string")out+=i+" 0 obj\n"+o+"\nendobj\n";
+    else out+=i+" 0 obj\n<< /Length "+o.stream.length+" >>\nstream\n"+o.stream+"endstream\nendobj\n";
+  }
+  const xs=out.length;
+  out+="xref\n0 "+next+"\n0000000000 65535 f \n";
+  for(let i=1;i<next;i++)out+=String(xref[i]).padStart(10,"0")+" 00000 n \n";
+  out+="trailer\n<< /Size "+next+" /Root 1 0 R >>\nstartxref\n"+xs+"\n%%EOF";
+  return Uint8Array.from(out,c=>c.charCodeAt(0)&0xFF);
+}
+
+document.getElementById("pdfBtn").addEventListener("click",()=>{
+  try{
+    const bytes=buildPdfReport();
+    const blob=new Blob([bytes],{type:"application/pdf"});
+    const url=URL.createObjectURL(blob);
+    const a=document.createElement("a");
+    a.href=url;
+    a.download="recast-se-report-"+new Date().toISOString().slice(0,10)+".pdf";
+    document.body.appendChild(a);a.click();a.remove();
+    setTimeout(()=>URL.revokeObjectURL(url),5000);
+  }catch(err){
+    refreshMsg.className="refreshmsg err";
+    refreshMsg.textContent="Couldn't create PDF: "+err.message;
   }
 });
 
