@@ -115,7 +115,7 @@
 
   /* ---------- donut ---------- */
   .donutwrap{display:flex;gap:16px;align-items:center;flex-wrap:wrap}
-  .legend{display:flex;flex-direction:column;gap:8px;font-size:12.5px;flex:1;min-width:150px}
+  .legend{display:flex;flex-direction:column;gap:8px;font-size:12.5px;flex:1;min-width:150px;max-height:220px;overflow-y:auto;padding-right:4px}
   .legend .li{display:flex;align-items:center;gap:8px}
   .legend .sw{width:11px;height:11px;border-radius:2px;flex:none}
   .legend .ln{flex:1;color:var(--gray);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -455,11 +455,13 @@ const DONUT_COLORS=["#0000CC","#00BFFF","#0F7A3F","#CC8800","#E07050","#7A5AF8",
 function renderDonut(){
   const el=document.getElementById("donut");const leg=document.getElementById("donutLegend");
   const mc={};VIEW.forEach(r=>{const p=r.user||"(unattributed)";mc[p]=(mc[p]||0)+1;});
-  let items=Object.entries(mc).sort((a,b)=>b[1]-a[1]);
-  if(items.length>7){
-    const others=items.slice(6).reduce((s,i)=>s+i[1],0);
-    items=items.slice(0,6).concat([["Others",others]]);
-  }
+  // list every asker by name — never roll real people into "Others"; keep
+  // "(unattributed)" pinned last since it isn't a person.
+  const items=Object.entries(mc).sort((a,b)=>{
+    const au=a[0]==="(unattributed)",bu=b[0]==="(unattributed)";
+    if(au!==bu)return au?1:-1;
+    return b[1]-a[1];
+  });
   const total=items.reduce((s,i)=>s+i[1],0);
   if(!total){el.innerHTML='<div class="empty">No data.</div>';leg.innerHTML="";return;}
   const cx=70,cy=70,r=58,rin=36;let ang=-Math.PI/2;
@@ -809,10 +811,18 @@ function buildPdfReport(){
     });
   }
   const mc={};VIEW.forEach(r=>{const p=r.user||"(unattributed)";mc[p]=(mc[p]||0)+1;});
-  let dItems=Object.entries(mc).sort((a,b)=>b[1]-a[1]);
-  if(dItems.length>7){
-    const others=dItems.slice(6).reduce((s,i)=>s+i[1],0);
-    dItems=dItems.slice(0,6).concat([["Others",others]]);
+  let dItems=Object.entries(mc).sort((a,b)=>{
+    const au=a[0]==="(unattributed)",bu=b[0]==="(unattributed)";
+    if(au!==bu)return au?1:-1;
+    return b[1]-a[1];
+  });
+  // Fit every asker into the fixed card; only fold a long tail into "Others"
+  // when they physically can't fit even at the minimum row height.
+  const legTop=chY+126, legBot=chY+194, minRowH=6.5;
+  const legCap=Math.max(1,Math.floor((legBot-legTop)/minRowH));
+  if(dItems.length>legCap){
+    const others=dItems.slice(legCap-1).reduce((s,i)=>s+i[1],0);
+    dItems=dItems.slice(0,legCap-1).concat([["Others",others]]);
   }
   const dTotal=dItems.reduce((s,i)=>s+i[1],0);
   if(!dTotal){txt("No data.",PDF_M+441,chY+105,9,PDF_C.gray,false,"center");}
@@ -824,13 +834,16 @@ function buildPdfReport(){
         wedge(cx,cy,r,rin,a,a2,DONUT_COLORS[i%DONUT_COLORS.length]);a=a2;});}
     txt(dTotal.toLocaleString(),cx,cy+2,12,PDF_C.ink,true,"center");
     txt("QUESTIONS",cx,cy+12,5.5,PDF_C.gray,false,"center");
-    let ly=chY+126;
+    const rowH=Math.min(11,(legBot-legTop)/dItems.length);
+    const lfs=rowH>=10?7.5:Math.max(6,rowH-1.2);
+    const swz=rowH>=9?7:5.5;
+    let ly=legTop;
     dItems.forEach((it,i)=>{
-      rect(PDF_M+362,ly-6,7,7,DONUT_COLORS[i%DONUT_COLORS.length]);
+      rect(PDF_M+362,ly-swz+1,swz,swz,DONUT_COLORS[i%DONUT_COLORS.length]);
       const pct=Math.round(it[1]/dTotal*100);
-      txt(it[1].toLocaleString()+" · "+pct+"%",PDF_M+522,ly,7.5,PDF_C.ink,true,"right");
-      txt(trunc(it[0],7.5,false,95),PDF_M+374,ly,7.5,PDF_C.gray);
-      ly+=11;
+      txt(it[1].toLocaleString()+" · "+pct+"%",PDF_M+522,ly,lfs,PDF_C.ink,true,"right");
+      txt(trunc(it[0],lfs,false,95),PDF_M+374,ly,lfs,PDF_C.gray);
+      ly+=rowH;
     });
   }
   y=chY+216;
